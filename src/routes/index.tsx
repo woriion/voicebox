@@ -92,7 +92,7 @@ function enrichTokensWithHistory(tokens: SentenceToken[], history: string[]): Se
 
   for (const phrase of history) {
     const histWords = phrase.split(/\s+/).filter(Boolean);
-    
+
     if (histWords.length === predCount) {
       let diffCount = 0;
       const diffs: Array<{ index: number; histWord: string }> = [];
@@ -100,7 +100,7 @@ function enrichTokensWithHistory(tokens: SentenceToken[], history: string[]): Se
       for (let i = 0; i < predCount; i++) {
         const pWord = predictedWords[i].toLowerCase().replace(/[^\w]/g, "");
         const hWord = histWords[i].toLowerCase().replace(/[^\w]/g, "");
-        
+
         if (pWord !== hWord) {
           diffCount++;
           diffs.push({ index: i, histWord: histWords[i] });
@@ -124,7 +124,7 @@ function enrichTokensWithHistory(tokens: SentenceToken[], history: string[]): Se
     const filteredHistAlts = histAlts.filter(
       (alt) => alt.toLowerCase() !== currentWordLower
     );
-    
+
     return {
       ...token,
       historyAlternatives: filteredHistAlts,
@@ -156,7 +156,7 @@ function SpeakPage() {
 
     const intervalTime = backend.isBackendAvailable ? 150 : 50;
     const maxSimulated = backend.isBackendAvailable ? 95 : 90;
-    
+
     if (backend.isBackendAvailable && backend.status?.generation_progress) {
       setProgress(Math.max(10, backend.status.generation_progress));
     } else {
@@ -171,10 +171,10 @@ function SpeakPage() {
             return Math.min(100, backendProgress);
           }
         }
-        
+
         if (prev < maxSimulated) {
-          const increment = backend.isBackendAvailable 
-            ? Math.random() * 4 + 1 
+          const increment = backend.isBackendAvailable
+            ? Math.random() * 4 + 1
             : 10;
           return Math.min(maxSimulated, prev + increment);
         }
@@ -210,7 +210,7 @@ function SpeakPage() {
             // Keep recent empty initially for a temporary session list
             setPhraseHistory(uniqueTexts);
           }
-        } catch {}
+        } catch { }
       }
     }
   }, [user]);
@@ -338,7 +338,7 @@ function SpeakPage() {
       supabase
         .from("phrases")
         .insert({ user_id: user.id, text, last_used_at: new Date().toISOString() })
-        .then(() => {});
+        .then(() => { });
     }
     await backend.stop().catch(() => null);
     resetSession();
@@ -357,7 +357,7 @@ function SpeakPage() {
       <div className="mx-auto flex min-h-screen max-w-md flex-col">
         <header className="flex items-center justify-between px-6 pb-3 pt-7">
           <Link to="/" className="flex items-center gap-2 hover:opacity-70">
-            <img src="/logo.png" className="size-6 object-contain" alt="VoiceBox Logo" />
+            <img src="/voicebox.png" className="size-6 object-contain" alt="VoiceBox Logo" />
             <span className="text-lg font-semibold tracking-tight">VoiceBox</span>
             <span className="rounded-full bg-surface px-2 py-0.5 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
               {user ? "Personalized" : "Guest"}
@@ -442,7 +442,7 @@ function SpeakPage() {
                     {/* Pulsing grid layout background */}
                     <div className="absolute inset-0 bg-[linear-gradient(to_right,#8080800a_1px,transparent_1px),linear-gradient(to_bottom,#8080800a_1px,transparent_1px)] bg-[size:14px_24px] pointer-events-none" />
                     <div className="absolute inset-0 bg-gradient-to-tr from-accent/5 via-primary/5 to-transparent animate-pulse duration-[4000ms] pointer-events-none" />
-                    
+
                     <div className="relative flex flex-col h-full z-10 w-full justify-between">
                       {/* Top Header: Equalizer & Status */}
                       <div className="flex items-center justify-between pb-3 border-b border-border/60">
@@ -534,8 +534,8 @@ function SpeakPage() {
                         <div className="absolute inset-0 bg-background/95 backdrop-blur-sm rounded-3xl p-5 flex flex-col justify-between border border-border shadow-2xl animate-in slide-in-from-bottom duration-200 z-20">
                           <div className="flex items-center justify-between pb-2.5 border-b border-border/60">
                             <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-                              {tokens[editingIdx].word === null || tokens[editingIdx].word === "" 
-                                ? "Type or select word" 
+                              {tokens[editingIdx].word === null || tokens[editingIdx].word === ""
+                                ? "Type or select word"
                                 : "Edit word"}
                             </span>
                             <button
@@ -639,7 +639,7 @@ function SpeakPage() {
                     )}
                     {phase === "idle" && <MicOff className="size-12" />}
                     {phase === "ready" && <Loader2 className="size-12 animate-spin text-muted-foreground" />}
-                    
+
                     <span className="text-[11px] font-semibold uppercase tracking-[0.15em]">
                       {phase === "preparing" && "Starting camera..."}
                       {phase === "tracking" && "Reading mouth..."}
@@ -688,17 +688,17 @@ function SpeakPage() {
                       <Sparkles className="size-8 text-accent animate-pulse" />
                     </div>
                   </div>
-                  
+
                   <h3 className="text-base font-semibold tracking-tight text-foreground mb-1">
                     {progress < 30 && "Analyzing lip movements..."}
                     {progress >= 30 && progress < 70 && "Running visual prediction..."}
                     {progress >= 70 && progress < 90 && "Fusing audio & visual cues..."}
                     {progress >= 90 && "Generating final text..."}
                   </h3>
-                  
+
                   <p className="text-xs text-muted-foreground mb-6 max-w-[240px]">
-                    {backend.isBackendAvailable 
-                      ? `Processing pipeline...` 
+                    {backend.isBackendAvailable
+                      ? `Processing pipeline...`
                       : "Simulating prediction pipeline..."}
                   </p>
 
