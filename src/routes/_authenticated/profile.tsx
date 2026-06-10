@@ -82,8 +82,8 @@ function ProfilePage() {
               <div>
                 <h2 className="text-base font-semibold">Personalization profile</h2>
                 <p className="text-sm text-muted-foreground">
-                  {count} {count === 1 ? "sentence" : "sentences"} spoken. The more
-                  you use VoiceBox, the more the model adapts to you.
+                  {count} {count === 1 ? "sentence" : "sentences"} spoken. VoiceBox
+                  automatically learns from your history to suggest smart word corrections.
                 </p>
               </div>
             </div>
@@ -97,23 +97,6 @@ function ProfilePage() {
               Profile strength: {strengthPct}%
             </p>
           </section>
-
-          {/* Register mouth movements shortcut */}
-          <Link
-            to="/calibrate"
-            className="flex items-center gap-4 rounded-3xl bg-primary p-5 text-primary-foreground shadow-sm transition hover:opacity-95"
-          >
-            <div className="rounded-xl bg-primary-foreground/15 p-2.5">
-              <Mic className="size-5" />
-            </div>
-            <div className="flex-1">
-              <h2 className="text-base font-semibold">Register mouth movements</h2>
-              <p className="text-sm opacity-80">
-                Record the alphabet, then optionally common words, to personalize predictions.
-              </p>
-            </div>
-            <ChevronRight className="size-5 opacity-80" />
-          </Link>
 
           {/* Sentence history */}
           <section>

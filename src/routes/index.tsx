@@ -62,6 +62,10 @@ function normalizeWord(word: string | null, isFirst: boolean): string | null {
   return lower;
 }
 
+type SentenceTokenExtended = SentenceToken & {
+  historyAlternatives?: string[];
+};
+
 function normalizeTokens(tokens: SentenceToken[]): SentenceToken[] {
   return tokens.map((token, i) => {
     const word = normalizeWord(token.word, i === 0);
@@ -77,15 +81,67 @@ function normalizeTokens(tokens: SentenceToken[]): SentenceToken[] {
   });
 }
 
+function enrichTokensWithHistory(tokens: SentenceToken[], history: string[]): SentenceTokenExtended[] {
+  if (!history || history.length === 0) return tokens;
+
+  const predictedWords = tokens.map((token) => token.word ?? "");
+  const predCount = predictedWords.length;
+  if (predCount === 0) return tokens;
+
+  const corrections: Record<number, Set<string>> = {};
+
+  for (const phrase of history) {
+    const histWords = phrase.split(/\s+/).filter(Boolean);
+    
+    if (histWords.length === predCount) {
+      let diffCount = 0;
+      const diffs: Array<{ index: number; histWord: string }> = [];
+
+      for (let i = 0; i < predCount; i++) {
+        const pWord = predictedWords[i].toLowerCase().replace(/[^\w]/g, "");
+        const hWord = histWords[i].toLowerCase().replace(/[^\w]/g, "");
+        
+        if (pWord !== hWord) {
+          diffCount++;
+          diffs.push({ index: i, histWord: histWords[i] });
+        }
+      }
+
+      if (diffCount > 0 && diffCount <= 2) {
+        for (const d of diffs) {
+          if (!corrections[d.index]) {
+            corrections[d.index] = new Set<string>();
+          }
+          corrections[d.index].add(d.histWord);
+        }
+      }
+    }
+  }
+
+  return tokens.map((token, i) => {
+    const histAlts = corrections[i] ? Array.from(corrections[i]) : [];
+    const currentWordLower = (token.word || "").toLowerCase();
+    const filteredHistAlts = histAlts.filter(
+      (alt) => alt.toLowerCase() !== currentWordLower
+    );
+    
+    return {
+      ...token,
+      historyAlternatives: filteredHistAlts,
+    };
+  });
+}
+
 function SpeakPage() {
   const { user } = useCurrentUser();
   const backend = useVoiceBoxBackend();
   const [sentenceIdx, setSentenceIdx] = useState(0);
   const [phase, setPhase] = useState<VoiceBoxPhase>("idle");
   const [showCard, setShowCard] = useState(false);
-  const [tokens, setTokens] = useState<SentenceToken[]>([]);
+  const [tokens, setTokens] = useState<SentenceTokenExtended[]>([]);
   const [editingIdx, setEditingIdx] = useState<number | null>(null);
   const [recent, setRecent] = useState<string[]>([]);
+  const [phraseHistory, setPhraseHistory] = useState<string[]>([]);
   const isCameraLive = Boolean(backend.status?.camera_running);
   const [progress, setProgress] = useState(0);
   const [mode, setMode] = useState<"Dysphonia" | "Aphonia">("Dysphonia");
@@ -130,12 +186,44 @@ function SpeakPage() {
   }, [isCurrentlyPredicting, backend.isBackendAvailable, backend.status?.generation_progress]);
 
   useEffect(() => {
+    if (user) {
+      supabase
+        .from("phrases")
+        .select("text")
+        .order("last_used_at", { ascending: false })
+        .limit(100)
+        .then(({ data, error }) => {
+          if (data && !error) {
+            const texts = data.map((d: any) => d.text).filter(Boolean);
+            const uniqueTexts = Array.from(new Set(texts));
+            // Keep recent empty initially for a temporary session list
+            setPhraseHistory(uniqueTexts);
+          }
+        });
+    } else {
+      const saved = localStorage.getItem("voicebox_recent_phrases");
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed)) {
+            const uniqueTexts = Array.from(new Set(parsed));
+            // Keep recent empty initially for a temporary session list
+            setPhraseHistory(uniqueTexts);
+          }
+        } catch {}
+      }
+    }
+  }, [user]);
+
+  useEffect(() => {
     if (!backend.prediction?.tokens.length) return;
-    setTokens(normalizeTokens(backend.prediction.tokens));
+    const normalized = normalizeTokens(backend.prediction.tokens);
+    const enriched = enrichTokensWithHistory(normalized, phraseHistory);
+    setTokens(enriched);
     setShowCard(true);
     setEditingIdx(null);
     setPhase("predicting");
-  }, [backend.prediction]);
+  }, [backend.prediction, phraseHistory]);
 
   useEffect(() => {
     if (backend.phase === "idle" && phase === "predicting" && !showCard) {
@@ -151,7 +239,16 @@ function SpeakPage() {
   }, [backend.status?.mode]);
 
   function pushRecent(text: string) {
-    setRecent((items) => [text, ...items.filter((item) => item !== text)].slice(0, 6));
+    setRecent((items) => {
+      // Temporarily store in session memory (cleared on reload/navigation)
+      return [text, ...items.filter((item) => item !== text)].slice(0, 6);
+    });
+    setPhraseHistory((items) => {
+      const next = [text, ...items.filter((item) => item !== text)];
+      // History is persisted locally so offline corrections work
+      localStorage.setItem("voicebox_recent_phrases", JSON.stringify(next));
+      return next;
+    });
   }
 
   function resetSession() {
@@ -215,7 +312,9 @@ function SpeakPage() {
     } catch {
       const next = getSentenceAt(sentenceIdx);
       window.setTimeout(() => {
-        setTokens(normalizeTokens(next.tokens));
+        const normalized = normalizeTokens(next.tokens);
+        const enriched = enrichTokensWithHistory(normalized, phraseHistory);
+        setTokens(enriched);
         setShowCard(true);
       }, 700);
     }
@@ -336,6 +435,200 @@ function SpeakPage() {
                     alt="Live camera stream"
                     className="h-full w-full object-cover"
                   />
+                ) : phase === "predicting" && showCard ? (
+                  /* Prediction Card directly inside the camera box container */
+                  <div className="flex flex-col h-full w-full p-6 bg-card relative overflow-hidden animate-in fade-in duration-300">
+                    {/* Pulsing grid layout background */}
+                    <div className="absolute inset-0 bg-[linear-gradient(to_right,#8080800a_1px,transparent_1px),linear-gradient(to_bottom,#8080800a_1px,transparent_1px)] bg-[size:14px_24px] pointer-events-none" />
+                    <div className="absolute inset-0 bg-gradient-to-tr from-accent/5 via-primary/5 to-transparent animate-pulse duration-[4000ms] pointer-events-none" />
+                    
+                    <div className="relative flex flex-col h-full z-10 w-full justify-between">
+                      {/* Top Header: Equalizer & Status */}
+                      <div className="flex items-center justify-between pb-3 border-b border-border/60">
+                        <div className="flex items-center gap-2">
+                          <span className="relative flex h-2 w-2">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-accent"></span>
+                          </span>
+                          <span className="text-[10px] font-bold tracking-wider text-muted-foreground uppercase">
+                            Predicted Sentence
+                          </span>
+                        </div>
+                        {/* Premium multi-bar equalizer animation */}
+                        <div className="flex items-end gap-0.5 h-4">
+                          <span className="w-0.5 h-2 bg-accent/40 rounded-full animate-bounce duration-700 delay-100" />
+                          <span className="w-0.5 h-4 bg-accent/60 rounded-full animate-bounce duration-500 delay-300" />
+                          <span className="w-0.5 h-3 bg-accent/80 rounded-full animate-bounce duration-600 delay-200" />
+                          <span className="w-0.5 h-1.5 bg-accent/60 rounded-full animate-bounce duration-800 delay-400" />
+                        </div>
+                      </div>
+
+                      {/* Middle: Tokens container */}
+                      <div className="flex-1 flex flex-col justify-center my-4 overflow-y-auto scrollbar-hide">
+                        {tokens.length === 0 ? (
+                          <div className="flex flex-col items-center gap-2 py-4 text-muted-foreground">
+                            <span className="text-xs">Sentence is empty</span>
+                            <button
+                              onClick={() => handleInsertToken(0)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-accent hover:bg-accent/10 border border-dashed border-accent/40 rounded-xl transition-colors"
+                            >
+                              <Plus className="size-3.5" /> Add first word
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex flex-wrap items-center justify-center gap-x-1 gap-y-2 p-1">
+                            {/* Plus button at start */}
+                            <button
+                              onClick={() => handleInsertToken(0)}
+                              className="size-6 inline-flex items-center justify-center rounded-full text-muted-foreground/40 hover:text-accent hover:bg-surface/50 transition-colors"
+                              title="Insert word at start"
+                            >
+                              <Plus className="size-3.5" />
+                            </button>
+
+                            {tokens.map((token, i) => {
+                              const isBlank = token.word === null || token.word === "";
+                              return (
+                                <Fragment key={`${token.word ?? "blank"}-${i}`}>
+                                  <button
+                                    onClick={() => setEditingIdx(editingIdx === i ? null : i)}
+                                    className={cn(
+                                      "transition-all duration-150 py-1 px-2.5 rounded-lg text-lg font-semibold tracking-tight border",
+                                      isBlank
+                                        ? "border-dashed border-accent/40 text-accent bg-accent/5 hover:bg-accent/10"
+                                        : "border-transparent text-foreground hover:bg-surface",
+                                      editingIdx === i && "ring-2 ring-accent border-transparent bg-accent/5"
+                                    )}
+                                  >
+                                    {token.word || "___"}
+                                  </button>
+
+                                  {/* Plus button after word */}
+                                  <button
+                                    onClick={() => handleInsertToken(i + 1)}
+                                    className="size-6 inline-flex items-center justify-center rounded-full text-muted-foreground/40 hover:text-accent hover:bg-surface/50 transition-colors"
+                                    title={`Insert word after "${token.word ?? ''}"`}
+                                  >
+                                    <Plus className="size-3.5" />
+                                  </button>
+                                </Fragment>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Bottom action: Speak Button */}
+                      <div className="pt-3 border-t border-border/60 flex justify-center">
+                        <button
+                          onClick={handleSpeakSentence}
+                          className="inline-flex items-center gap-2 rounded-full bg-primary px-5 py-2.5 text-xs font-semibold text-primary-foreground shadow-sm transition-transform active:scale-95"
+                        >
+                          <Volume2 className="size-3.5" /> Tap to speak
+                        </button>
+                      </div>
+
+                      {/* Floating overlay edit panel inside the aspect-square container */}
+                      {editingIdx !== null && tokens[editingIdx] !== undefined && (
+                        <div className="absolute inset-0 bg-background/95 backdrop-blur-sm rounded-3xl p-5 flex flex-col justify-between border border-border shadow-2xl animate-in slide-in-from-bottom duration-200 z-20">
+                          <div className="flex items-center justify-between pb-2.5 border-b border-border/60">
+                            <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                              {tokens[editingIdx].word === null || tokens[editingIdx].word === "" 
+                                ? "Type or select word" 
+                                : "Edit word"}
+                            </span>
+                            <button
+                              onClick={() => setEditingIdx(null)}
+                              className="rounded-full p-1 text-muted-foreground hover:bg-surface"
+                            >
+                              <X className="size-4" />
+                            </button>
+                          </div>
+
+                          <div className="flex-1 my-3.5 overflow-y-auto space-y-4 scrollbar-hide pr-1">
+                            {/* Manual text input for direct editing */}
+                            <div>
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block mb-1">
+                                Manual Edit
+                              </span>
+                              <input
+                                type="text"
+                                value={tokens[editingIdx].word ?? ""}
+                                onChange={(e) => {
+                                  const newVal = e.target.value;
+                                  setTokens((prev) =>
+                                    prev.map((token, i) =>
+                                      i === editingIdx ? { ...token, word: newVal } : token
+                                    )
+                                  );
+                                }}
+                                placeholder="Type word..."
+                                className="w-full px-3 py-2 text-base rounded-xl bg-card border border-border text-foreground placeholder-muted-foreground focus:outline-none focus:ring-1 focus:ring-accent"
+                                autoFocus
+                              />
+                            </div>
+
+                            {/* Suggested from history corrections */}
+                            {("historyAlternatives" in tokens[editingIdx]) &&
+                              (tokens[editingIdx] as any).historyAlternatives &&
+                              (tokens[editingIdx] as any).historyAlternatives.length > 0 && (
+                                <div className="space-y-1.5 animate-in fade-in duration-300">
+                                  <span className="text-[10px] font-bold uppercase tracking-wider text-accent block">
+                                    Suggested from history
+                                  </span>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {(tokens[editingIdx] as any).historyAlternatives.map((alt: string) => (
+                                      <button
+                                        key={alt}
+                                        onClick={() => handlePickAlternative(editingIdx, alt)}
+                                        className="rounded-lg bg-accent/10 border border-accent/30 px-2.5 py-1.5 text-xs font-semibold text-accent hover:bg-accent/20 transition-colors"
+                                      >
+                                        {tokens[editingIdx].word || "___"} → {alt}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                            {/* Suggestions list */}
+                            <div className="space-y-1.5">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">
+                                Suggestions
+                              </span>
+                              <div className="flex flex-wrap gap-1.5">
+                                {(tokens[editingIdx].alternatives.length
+                                  ? tokens[editingIdx].alternatives
+                                  : ["yes", "no", "please", "help"]
+                                ).map((alt) => (
+                                  <button
+                                    key={alt}
+                                    onClick={() => handlePickAlternative(editingIdx, alt)}
+                                    className="rounded-lg bg-card px-2.5 py-1.5 text-xs font-medium text-foreground ring-1 ring-border hover:bg-surface transition-colors"
+                                  >
+                                    {alt}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Footer Action: Delete word */}
+                          <div className="pt-2.5 border-t border-border flex justify-end">
+                            <button
+                              onClick={() => {
+                                setTokens((prev) => prev.filter((_, i) => i !== editingIdx));
+                                setEditingIdx(null);
+                              }}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-destructive hover:bg-destructive/10 transition-colors"
+                            >
+                              <Trash2 className="size-3.5" />
+                              Remove word
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 ) : (
                   <div className="flex flex-col items-center gap-3 text-muted-foreground p-6 text-center animate-in fade-in duration-300">
                     {phase === "preparing" && <Loader2 className="size-12 animate-spin text-accent" />}
@@ -422,7 +715,7 @@ function SpeakPage() {
                   <div className="absolute left-1/2 top-1/2 size-16 -translate-x-1/2 -translate-y-1/2 rounded-full border border-accent/40" />
                 </div>
               )}
-              {phase === "predicting" && (
+              {phase === "predicting" && !showCard && (
                 <div className="pointer-events-none absolute inset-0 m-8 rounded-2xl border-2 border-accent/60" />
               )}
 
@@ -472,7 +765,7 @@ function SpeakPage() {
                   </button>
                 )}
 
-                {phase === "predicting" && (
+                {phase === "predicting" && !showCard && (
                   <button
                     disabled
                     className="inline-flex items-center gap-2 rounded-full bg-primary/60 px-5 py-2.5 text-sm font-semibold text-primary-foreground shadow-lg ring-1 ring-border/50 cursor-wait animate-pulse"
@@ -490,150 +783,7 @@ function SpeakPage() {
             </div>
           )}
 
-          {showCard && (
-            <section className="text-center">
-              <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-                Predicted sentence
-              </span>
-              <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border">
-                {tokens.length === 0 ? (
-                  <div className="flex flex-col items-center gap-3 py-6 text-muted-foreground">
-                    <span className="text-sm">Sentence is empty</span>
-                    <button
-                      onClick={() => handleInsertToken(0)}
-                      className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-accent hover:bg-accent/10 border border-dashed border-accent/40 rounded-2xl transition-colors"
-                    >
-                      <Plus className="size-4" /> Add first word
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex flex-wrap items-center justify-center gap-x-1 gap-y-3">
-                    {/* Plus button at start */}
-                    <button
-                      onClick={() => handleInsertToken(0)}
-                      className="size-7 inline-flex items-center justify-center rounded-full text-muted-foreground/40 hover:text-accent hover:bg-surface/50 transition-colors"
-                      title="Insert word at start"
-                    >
-                      <Plus className="size-4" />
-                    </button>
 
-                    {tokens.map((token, i) => {
-                      const isBlank = token.word === null || token.word === "";
-                      return (
-                        <Fragment key={`${token.word ?? "blank"}-${i}`}>
-                          <button
-                            onClick={() => setEditingIdx(editingIdx === i ? null : i)}
-                            className={cn(
-                              "transition-all duration-150 py-1.5 px-3 rounded-xl text-2xl font-semibold tracking-tight border",
-                              isBlank
-                                ? "border-dashed border-accent/40 text-accent bg-accent/5 hover:bg-accent/10"
-                                : "border-transparent text-foreground hover:bg-surface",
-                              editingIdx === i && "ring-2 ring-accent border-transparent bg-accent/5"
-                            )}
-                          >
-                            {token.word || "___"}
-                          </button>
-
-                          {/* Plus button after word */}
-                          <button
-                            onClick={() => handleInsertToken(i + 1)}
-                            className="size-7 inline-flex items-center justify-center rounded-full text-muted-foreground/40 hover:text-accent hover:bg-surface/50 transition-colors"
-                            title={`Insert word after "${token.word ?? ''}"`}
-                          >
-                            <Plus className="size-4" />
-                          </button>
-                        </Fragment>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {editingIdx !== null && tokens[editingIdx] !== undefined && (
-                  <div className="mt-4 rounded-2xl bg-surface p-4 ring-1 ring-border text-left">
-                    <div className="mb-3 flex items-center justify-between">
-                      <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-                        {tokens[editingIdx].word === null || tokens[editingIdx].word === "" 
-                          ? "Type or select word" 
-                          : "Edit word"}
-                      </span>
-                      <button
-                        onClick={() => setEditingIdx(null)}
-                        className="rounded-full p-1 text-muted-foreground hover:bg-card"
-                      >
-                        <X className="size-3.5" />
-                      </button>
-                    </div>
-
-                    <div className="space-y-4">
-                      {/* Manual text input for direct editing */}
-                      <div>
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block mb-1">
-                          Manual Edit
-                        </span>
-                        <input
-                          type="text"
-                          value={tokens[editingIdx].word ?? ""}
-                          onChange={(e) => {
-                            const newVal = e.target.value;
-                            setTokens((prev) =>
-                              prev.map((token, i) =>
-                                i === editingIdx ? { ...token, word: newVal } : token
-                              )
-                            );
-                          }}
-                          placeholder="Type word..."
-                          className="w-full px-3 py-2 text-base rounded-xl bg-card border border-border text-foreground placeholder-muted-foreground focus:outline-none focus:ring-1 focus:ring-accent"
-                          autoFocus
-                        />
-                      </div>
-
-                      {/* Suggestions list */}
-                      <div className="space-y-1.5">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">
-                          Suggestions
-                        </span>
-                        <div className="flex flex-wrap gap-1.5">
-                          {(tokens[editingIdx].alternatives.length
-                            ? tokens[editingIdx].alternatives
-                            : ["yes", "no", "please", "help"]
-                          ).map((alt) => (
-                            <button
-                              key={alt}
-                              onClick={() => handlePickAlternative(editingIdx, alt)}
-                              className="rounded-lg bg-card px-2.5 py-1.5 text-xs font-medium text-foreground ring-1 ring-border hover:bg-muted transition-colors"
-                            >
-                              {alt}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Action buttons (like Delete) */}
-                      <div className="pt-3 border-t border-border flex justify-end">
-                        <button
-                          onClick={() => {
-                            setTokens((prev) => prev.filter((_, i) => i !== editingIdx));
-                            setEditingIdx(null);
-                          }}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-destructive hover:bg-destructive/10 transition-colors"
-                        >
-                          <Trash2 className="size-3.5" />
-                          Remove word
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                <button
-                  onClick={handleSpeakSentence}
-                  className="mt-5 inline-flex items-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground shadow-sm transition-transform active:scale-95"
-                >
-                  <Volume2 className="size-4" /> Tap to speak
-                </button>
-              </div>
-            </section>
-          )}
 
           {recent.length > 0 && (
             <section>
@@ -698,21 +848,17 @@ function SpeakPage() {
 
           {user && (
             <section className="pb-10 pt-2">
-              <Link
-                to="/calibrate"
-                className="flex items-center gap-4 rounded-3xl bg-card p-5 shadow-sm ring-1 ring-border transition-transform active:scale-[0.99]"
-              >
+              <div className="flex items-center gap-4 rounded-3xl bg-card p-5 shadow-sm ring-1 ring-border">
                 <div className="shrink-0 rounded-xl bg-secondary p-2.5">
-                  <Mic className="size-4 text-secondary-foreground" />
+                  <Sparkles className="size-4 text-primary animate-pulse" />
                 </div>
                 <div className="flex-1">
-                  <h3 className="text-sm font-semibold text-foreground">Sharpen your model</h3>
+                  <h3 className="text-sm font-semibold text-foreground">History correction active</h3>
                   <p className="text-xs leading-relaxed text-muted-foreground">
-                    A 60-second calibration pass makes predictions noticeably tighter.
+                    VoiceBox analyzes your spoken phrase history to suggest custom word-level overrides.
                   </p>
                 </div>
-                <span className="text-xs font-semibold text-primary">Tune</span>
-              </Link>
+              </div>
             </section>
           )}
 
@@ -725,12 +871,11 @@ function SpeakPage() {
                   </div>
                   <div className="space-y-1">
                     <h3 className="text-base font-semibold text-foreground">
-                      Better accuracy for you
+                      Sync your speech history
                     </h3>
                     <p className="text-pretty text-sm leading-relaxed text-muted-foreground">
-                      In guest mode, VoiceBox uses a generic model. Create an account and we'll
-                      store your mouth-movement data securely to your profile, so predictions adapt
-                      to your unique speech patterns over time.
+                      Create an account to securely sync your spoken phrases across devices. VoiceBox
+                      uses your spoken history to learn common corrections and suggest them automatically.
                     </p>
                   </div>
                 </div>

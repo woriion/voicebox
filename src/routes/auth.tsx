@@ -11,7 +11,7 @@ export const Route = createFileRoute("/auth")({
       {
         name: "description",
         content:
-          "Create an account or sign in to personalize VoiceBox to your mouth movements.",
+          "Create an account or sign in to load your personalized VoiceBox speech history.",
       },
     ],
   }),
@@ -47,8 +47,8 @@ function AuthPage() {
           },
         });
         if (error) throw error;
-        toast.success("Account created! Let's personalize VoiceBox.");
-        navigate({ to: "/calibrate", replace: true });
+        toast.success("Account created! Welcome to VoiceBox.");
+        navigate({ to: "/", replace: true });
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
@@ -79,8 +79,8 @@ function AuthPage() {
             <h1 className="text-3xl font-semibold tracking-tight">Welcome to VoiceBox</h1>
             <p className="mt-2 text-pretty text-sm text-muted-foreground">
               {mode === "signup"
-                ? "Create an account to personalize predictions to your mouth movements."
-                : "Sign in to load your personalized speech profile."}
+                ? "Create an account to load predictions and sync speech history corrections."
+                : "Sign in to load your speech profile history."}
             </p>
           </div>
 
@@ -88,9 +88,9 @@ function AuthPage() {
           <div className="mb-6 flex items-start gap-3 rounded-2xl bg-warm/60 p-4 ring-1 ring-border">
             <Sparkles className="mt-0.5 size-4 shrink-0 text-foreground" />
             <p className="text-xs leading-relaxed text-foreground/80">
-              We store your mouth-movement samples and corrections privately to
-              your account. This data is used to improve prediction accuracy for
-              you over time.
+              We store your spoken phrases and corrections privately to your account.
+              This history is used to suggest smart word corrections and adapt predictions
+              for you over time.
             </p>
           </div>
 
