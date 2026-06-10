@@ -1,33 +1,31 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
+  Clock,
+  Globe,
+  Loader2,
   Mic,
   MicOff,
-  Volume2,
-  UserPlus,
-  Sparkles,
-  User as UserIcon,
-  Globe,
   Play,
+  Sparkles,
   Square,
-  Clock,
-  Loader2,
+  User as UserIcon,
+  UserPlus,
+  Volume2,
   X,
 } from "lucide-react";
-import {
-  getSentenceAt,
-  type SentenceToken,
-} from "@/lib/mockPredictions";
-import { speak } from "@/lib/tts";
-import { useCurrentUser } from "@/hooks/use-current-user";
-import { supabase } from "@/integrations/supabase/client";
 import { ConsentModal } from "@/components/ConsentModal";
+import { useCurrentUser } from "@/hooks/use-current-user";
+import { useVoiceBoxBackend, type VoiceBoxPhase } from "@/hooks/use-voicebox-backend";
+import { getSentenceAt, type SentenceToken } from "@/lib/mockPredictions";
+import { speak as browserSpeak } from "@/lib/tts";
+import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "VoiceBox — Speak with your mouth movements" },
+      { title: "VoiceBox - Speak with your mouth movements" },
       {
         name: "description",
         content:
@@ -38,72 +36,92 @@ export const Route = createFileRoute("/")({
   component: SpeakPage,
 });
 
-type Phase = "idle" | "tracking" | "predicting";
-
 function tokensToText(tokens: SentenceToken[]): string {
   return tokens
-    .map((t) => t.word ?? "___")
+    .map((token) => token.word ?? "___")
     .join(" ")
     .replace(/\s+([,.!?])/g, "$1");
 }
 
 function SpeakPage() {
   const { user } = useCurrentUser();
+  const backend = useVoiceBoxBackend();
   const [sentenceIdx, setSentenceIdx] = useState(0);
-  const [phase, setPhase] = useState<Phase>("idle");
+  const [phase, setPhase] = useState<VoiceBoxPhase>("idle");
   const [showCard, setShowCard] = useState(false);
   const [tokens, setTokens] = useState<SentenceToken[]>([]);
   const [editingIdx, setEditingIdx] = useState<number | null>(null);
   const [recent, setRecent] = useState<string[]>([]);
-  const finalizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isCameraLive = Boolean(backend.status?.camera_running);
 
-  // Phase machine — driven only by explicit user actions now.
   useEffect(() => {
-    const clearAll = () => {
-      if (finalizeTimerRef.current) clearTimeout(finalizeTimerRef.current);
-    };
+    if (!backend.prediction?.tokens.length) return;
+    setTokens(backend.prediction.tokens);
+    setShowCard(true);
+    setEditingIdx(null);
+    setPhase("predicting");
+  }, [backend.prediction]);
 
-    if (phase === "idle") {
-      clearAll();
-      setShowCard(false);
-      setEditingIdx(null);
-      setTokens([]);
-      return;
+  useEffect(() => {
+    if (backend.phase === "predicting") {
+      setPhase("predicting");
     }
-
-    if (phase === "tracking") {
-      // Reading mouth — no card yet, no sentence finalized.
-      setShowCard(false);
-      setEditingIdx(null);
-      setTokens([]);
-      return;
-    }
-
-    if (phase === "predicting") {
-      // Lock in the candidate sentence after a short buffer.
-      const next = getSentenceAt(sentenceIdx);
-      setTokens(next.tokens);
-      finalizeTimerRef.current = setTimeout(() => setShowCard(true), 1200);
-      return () => clearAll();
-    }
-  }, [phase, sentenceIdx]);
+  }, [backend.phase]);
 
   function pushRecent(text: string) {
-    setRecent((r) => [text, ...r.filter((w) => w !== text)].slice(0, 6));
+    setRecent((items) => [text, ...items.filter((item) => item !== text)].slice(0, 6));
   }
 
-  function endSession() {
+  function resetSession() {
     setPhase("idle");
-    setSentenceIdx((i) => i + 1);
+    setShowCard(false);
+    setEditingIdx(null);
+    setTokens([]);
+    setSentenceIdx((index) => index + 1);
   }
 
-  function handleSpeakSentence() {
+  async function handleStartTracking() {
+    setPhase("tracking");
+    setShowCard(false);
+    setTokens([]);
+    try {
+      await backend.startTracking("Dysphonia");
+    } catch (error) {
+      toast("Backend unavailable. Using demo prediction until it is running.");
+      console.warn(error);
+    }
+  }
+
+  async function handleStopTracking() {
+    setPhase("predicting");
+    setShowCard(false);
+    setEditingIdx(null);
+    try {
+      const prediction = await backend.generatePrediction();
+      if (prediction?.tokens.length) return;
+      throw new Error("No backend prediction returned");
+    } catch {
+      const next = getSentenceAt(sentenceIdx);
+      window.setTimeout(() => {
+        setTokens(next.tokens);
+        setShowCard(true);
+      }, 700);
+    }
+  }
+
+  async function handleSpeakSentence() {
     const text = tokensToText(tokens).replace(/___/g, "").replace(/\s+/g, " ").trim();
     if (!text) {
       toast("Fill in the blanks before speaking.");
       return;
     }
-    speak(text);
+
+    try {
+      await backend.speak(text);
+    } catch {
+      browserSpeak(text);
+    }
+
     pushRecent(text);
     if (user) {
       supabase
@@ -111,23 +129,29 @@ function SpeakPage() {
         .insert({ user_id: user.id, text, last_used_at: new Date().toISOString() })
         .then(() => {});
     }
-    endSession();
+    await backend.stop().catch(() => null);
+    resetSession();
   }
 
-
   function handlePickAlternative(idx: number, alt: string) {
-    setTokens((prev) => prev.map((t, i) => (i === idx ? { ...t, word: alt } : t)));
+    setTokens((prev) => prev.map((token, i) => (i === idx ? { ...token, word: alt } : token)));
     setEditingIdx(null);
   }
 
-
-  const isActive = phase !== "idle";
+  async function handlePhaseButton() {
+    if (phase === "idle") {
+      await handleStartTracking();
+      return;
+    }
+    if (phase === "tracking") {
+      await handleStopTracking();
+    }
+  }
 
   return (
     <div className="min-h-screen bg-background text-foreground">
       <ConsentModal />
       <div className="mx-auto flex min-h-screen max-w-md flex-col">
-        {/* Header */}
         <header className="flex items-center justify-between px-6 pb-3 pt-7">
           <Link to="/" className="flex items-center gap-2 hover:opacity-70">
             <span className="text-lg font-semibold tracking-tight">VoiceBox</span>
@@ -153,30 +177,39 @@ function SpeakPage() {
           )}
         </header>
 
-        {/* Status chips */}
         <div className="flex flex-wrap items-center gap-2 px-6 pb-2">
           <span className="inline-flex items-center gap-1.5 rounded-full bg-card px-3 py-1 text-xs font-medium text-foreground ring-1 ring-border">
             <Globe className="size-3" /> Language: English
           </span>
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-card px-3 py-1 text-xs font-medium text-foreground ring-1 ring-border">
+            {backend.isBackendAvailable ? "Backend connected" : "Demo fallback"}
+          </span>
         </div>
 
         <main className="flex flex-1 flex-col gap-5 px-6">
-          {/* Camera */}
           <section>
             <div className="relative aspect-square w-full">
               <div className="flex h-full w-full items-center justify-center overflow-hidden rounded-3xl bg-surface ring-1 ring-border">
-                <div className="flex flex-col items-center gap-3 text-muted-foreground">
-                  {phase === "tracking" && <Mic className="size-12 text-accent" />}
-                  {phase === "predicting" && (
-                    <Loader2 className="size-12 animate-spin text-accent" />
-                  )}
-                  {phase === "idle" && <MicOff className="size-12" />}
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.15em]">
-                    {phase === "tracking" && "Reading mouth"}
-                    {phase === "predicting" && "Predicting…"}
-                    {phase === "idle" && "Camera paused"}
-                  </span>
-                </div>
+                {isCameraLive && phase !== "idle" ? (
+                  <img
+                    src={backend.cameraUrl}
+                    alt="Live camera stream"
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <div className="flex flex-col items-center gap-3 text-muted-foreground">
+                    {phase === "tracking" && <Mic className="size-12 text-accent" />}
+                    {phase === "predicting" && (
+                      <Loader2 className="size-12 animate-spin text-accent" />
+                    )}
+                    {phase === "idle" && <MicOff className="size-12" />}
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.15em]">
+                      {phase === "tracking" && "Reading mouth"}
+                      {phase === "predicting" && "Predicting..."}
+                      {phase === "idle" && "Camera paused"}
+                    </span>
+                  </div>
+                )}
               </div>
               {phase === "tracking" && (
                 <div className="pointer-events-none absolute inset-0 m-8 rounded-2xl border-2 border-dashed border-accent/40">
@@ -187,13 +220,8 @@ function SpeakPage() {
                 <div className="pointer-events-none absolute inset-0 m-8 rounded-2xl border-2 border-accent/60" />
               )}
 
-              {/* Phase button */}
               <button
-                onClick={() => {
-                  if (phase === "idle") setPhase("tracking");
-                  else if (phase === "tracking") setPhase("predicting");
-                  // In "predicting", the button is hidden — only speaking ends the session.
-                }}
+                onClick={handlePhaseButton}
                 disabled={phase === "predicting"}
                 className="absolute bottom-4 left-1/2 inline-flex -translate-x-1/2 items-center gap-2 rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground shadow-lg ring-1 ring-border/50 disabled:opacity-60"
               >
@@ -209,14 +237,19 @@ function SpeakPage() {
                 )}
                 {phase === "predicting" && (
                   <>
-                    <Loader2 className="size-3.5 animate-spin" /> Predicting…
+                    <Loader2 className="size-3.5 animate-spin" /> Predicting...
                   </>
                 )}
               </button>
             </div>
           </section>
 
-          {/* Predicted sentence card */}
+          {backend.status?.listening && phase === "tracking" && (
+            <div className="rounded-2xl bg-card px-4 py-3 text-sm text-muted-foreground ring-1 ring-border">
+              Speaking window: {Number(backend.status.window_remaining || 0).toFixed(1)}s
+            </div>
+          )}
+
           {showCard && tokens.length > 0 && (
             <section className="text-center">
               <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-muted-foreground">
@@ -224,11 +257,11 @@ function SpeakPage() {
               </span>
               <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border">
                 <div className="flex flex-wrap items-center justify-center gap-2">
-                  {tokens.map((t, i) => {
-                    const isBlank = t.word === null;
+                  {tokens.map((token, i) => {
+                    const isBlank = token.word === null;
                     return (
                       <button
-                        key={i}
+                        key={`${token.word ?? "blank"}-${i}`}
                         onClick={() => setEditingIdx(editingIdx === i ? null : i)}
                         className={
                           isBlank
@@ -236,20 +269,17 @@ function SpeakPage() {
                             : "rounded-lg px-2 py-1 text-3xl font-semibold tracking-tight text-foreground transition-colors hover:bg-surface"
                         }
                       >
-                        {t.word ?? "___"}
+                        {token.word ?? "___"}
                       </button>
                     );
                   })}
                 </div>
 
-                {/* Alternatives popover for the tapped token */}
-                {editingIdx !== null && (
+                {editingIdx !== null && tokens[editingIdx] && (
                   <div className="mt-4 rounded-2xl bg-surface p-3 ring-1 ring-border">
                     <div className="mb-2 flex items-center justify-between">
                       <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-                        {tokens[editingIdx].word === null
-                          ? "Fill in the blank"
-                          : "Did you mean…"}
+                        {tokens[editingIdx].word === null ? "Fill in the blank" : "Did you mean..."}
                       </span>
                       <button
                         onClick={() => setEditingIdx(null)}
@@ -259,7 +289,10 @@ function SpeakPage() {
                       </button>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      {tokens[editingIdx].alternatives.map((alt) => (
+                      {(tokens[editingIdx].alternatives.length
+                        ? tokens[editingIdx].alternatives
+                        : ["yes", "no", "please", "help"]
+                      ).map((alt) => (
                         <button
                           key={alt}
                           onClick={() => handlePickAlternative(editingIdx, alt)}
@@ -282,8 +315,6 @@ function SpeakPage() {
             </section>
           )}
 
-
-          {/* Recent phrases */}
           {recent.length > 0 && (
             <section>
               <div className="mb-2 flex items-center gap-1.5">
@@ -293,23 +324,26 @@ function SpeakPage() {
                 </span>
               </div>
               <div className="flex flex-wrap gap-2 rounded-2xl bg-surface p-3 ring-1 ring-border">
-                {recent.map((w) => (
+                {recent.map((phrase) => (
                   <button
-                    key={w}
-                    onClick={() => {
-                      speak(w);
-                      pushRecent(w);
+                    key={phrase}
+                    onClick={async () => {
+                      try {
+                        await backend.speak(phrase);
+                      } catch {
+                        browserSpeak(phrase);
+                      }
+                      pushRecent(phrase);
                     }}
                     className="rounded-full bg-card px-3.5 py-1.5 text-sm text-foreground ring-1 ring-border shadow-sm transition-transform active:scale-95"
                   >
-                    {w}
+                    {phrase}
                   </button>
                 ))}
               </div>
             </section>
           )}
 
-          {/* Quick phrases — give logged-in users something to do at a glance */}
           {!showCard && (
             <section>
               <div className="mb-2 flex items-center gap-1.5">
@@ -319,31 +353,29 @@ function SpeakPage() {
                 </span>
               </div>
               <div className="grid grid-cols-2 gap-2">
-                {[
-                  "Yes",
-                  "No",
-                  "Thank you",
-                  "Please help",
-                  "Water, please",
-                  "One moment",
-                ].map((p) => (
-                  <button
-                    key={p}
-                    onClick={() => {
-                      speak(p);
-                      pushRecent(p);
-                    }}
-                    className="flex items-center justify-between gap-2 rounded-2xl bg-card px-4 py-3 text-left text-sm font-medium text-foreground ring-1 ring-border shadow-sm transition-transform active:scale-95"
-                  >
-                    <span>{p}</span>
-                    <Volume2 className="size-3.5 text-muted-foreground" />
-                  </button>
-                ))}
+                {["Yes", "No", "Thank you", "Please help", "Water, please", "One moment"].map(
+                  (phrase) => (
+                    <button
+                      key={phrase}
+                      onClick={async () => {
+                        try {
+                          await backend.speak(phrase);
+                        } catch {
+                          browserSpeak(phrase);
+                        }
+                        pushRecent(phrase);
+                      }}
+                      className="flex items-center justify-between gap-2 rounded-2xl bg-card px-4 py-3 text-left text-sm font-medium text-foreground ring-1 ring-border shadow-sm transition-transform active:scale-95"
+                    >
+                      <span>{phrase}</span>
+                      <Volume2 className="size-3.5 text-muted-foreground" />
+                    </button>
+                  ),
+                )}
               </div>
             </section>
           )}
 
-          {/* Personalization nudge for signed-in users */}
           {user && (
             <section className="pb-10 pt-2">
               <Link
@@ -354,21 +386,16 @@ function SpeakPage() {
                   <Mic className="size-4 text-secondary-foreground" />
                 </div>
                 <div className="flex-1">
-                  <h3 className="text-sm font-semibold text-foreground">
-                    Sharpen your model
-                  </h3>
+                  <h3 className="text-sm font-semibold text-foreground">Sharpen your model</h3>
                   <p className="text-xs leading-relaxed text-muted-foreground">
                     A 60-second calibration pass makes predictions noticeably tighter.
                   </p>
                 </div>
-                <span className="text-xs font-semibold text-primary">Tune →</span>
+                <span className="text-xs font-semibold text-primary">Tune</span>
               </Link>
             </section>
           )}
 
-
-
-          {/* Guest personalization disclosure */}
           {!user && (
             <section className="pb-10 pt-2">
               <div className="space-y-4 rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border">
@@ -381,10 +408,9 @@ function SpeakPage() {
                       Better accuracy for you
                     </h3>
                     <p className="text-pretty text-sm leading-relaxed text-muted-foreground">
-                      In guest mode, VoiceBox uses a generic model. Create an
-                      account and we'll store your mouth-movement data securely
-                      to your profile, so predictions adapt to your unique
-                      speech patterns over time.
+                      In guest mode, VoiceBox uses a generic model. Create an account and we'll
+                      store your mouth-movement data securely to your profile, so predictions adapt
+                      to your unique speech patterns over time.
                     </p>
                   </div>
                 </div>

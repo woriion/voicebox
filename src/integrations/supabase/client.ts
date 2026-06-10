@@ -2,6 +2,12 @@
 import { createClient } from '@supabase/supabase-js';
 import type { Database } from './types';
 
+export function isSupabaseConfigured() {
+  const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
+  const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_PUBLISHABLE_KEY;
+  return Boolean(SUPABASE_URL && SUPABASE_PUBLISHABLE_KEY);
+}
+
 function createSupabaseClient() {
   // Use import.meta.env for client-side (Vite build-time replacement)
   // Fall back to process.env for SSR (server-side rendering)
@@ -9,13 +15,8 @@ function createSupabaseClient() {
   const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_PUBLISHABLE_KEY;
 
   if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
-    const missing = [
-      ...(!SUPABASE_URL ? ['SUPABASE_URL'] : []),
-      ...(!SUPABASE_PUBLISHABLE_KEY ? ['SUPABASE_PUBLISHABLE_KEY'] : []),
-    ];
-    const message = `Missing Supabase environment variable(s): ${missing.join(', ')}. Connect Supabase in Lovable Cloud.`;
-    console.error(`[Supabase] ${message}`);
-    throw new Error(message);
+    console.warn('[Supabase] Missing environment variables. Running local guest mode.');
+    return createLocalGuestClient();
   }
 
   return createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
@@ -25,6 +26,37 @@ function createSupabaseClient() {
       autoRefreshToken: true,
     }
   });
+}
+
+function createLocalGuestClient() {
+  const emptyAuthResult = Promise.resolve({ data: { user: null, session: null }, error: null });
+  const subscription = { unsubscribe() {} };
+
+  return {
+    auth: {
+      getUser: () => emptyAuthResult,
+      getSession: () => emptyAuthResult,
+      onAuthStateChange: () => ({ data: { subscription } }),
+      signUp: async () => ({
+        data: null,
+        error: { message: 'Supabase is not configured for this local run.' },
+      }),
+      signInWithPassword: async () => ({
+        data: null,
+        error: { message: 'Supabase is not configured for this local run.' },
+      }),
+      signOut: async () => ({ error: null }),
+      setSession: async () => emptyAuthResult,
+    },
+    from: () => ({
+      insert: async () => ({ data: null, error: null }),
+      select: () => ({
+        eq: () => ({
+          order: async () => ({ data: [], error: null }),
+        }),
+      }),
+    }),
+  } as unknown as ReturnType<typeof createClient<Database>>;
 }
 
 let _supabase: ReturnType<typeof createSupabaseClient> | undefined;
