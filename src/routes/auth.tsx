@@ -76,7 +76,7 @@ function AuthPage() {
 
         <main className="flex flex-1 flex-col justify-center py-10">
           <div className="mb-8 text-center flex flex-col items-center">
-            <img src="/logo.png" className="size-16 object-contain mb-4" alt="VoiceBox Logo" />
+            <img src="/voicebox.png" className="size-16 object-contain mb-4" alt="VoiceBox Logo" />
             <h1 className="text-3xl font-semibold tracking-tight">Welcome to VoiceBox</h1>
             <p className="mt-2 text-pretty text-sm text-muted-foreground">
               {mode === "signup"
