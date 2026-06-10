@@ -357,6 +357,7 @@ function SpeakPage() {
       <div className="mx-auto flex min-h-screen max-w-md flex-col">
         <header className="flex items-center justify-between px-6 pb-3 pt-7">
           <Link to="/" className="flex items-center gap-2 hover:opacity-70">
+            <img src="/logo.png" className="size-6 object-contain" alt="VoiceBox Logo" />
             <span className="text-lg font-semibold tracking-tight">VoiceBox</span>
             <span className="rounded-full bg-surface px-2 py-0.5 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
               {user ? "Personalized" : "Guest"}
