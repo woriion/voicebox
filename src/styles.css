@@ -1,0 +1,131 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* SpeakEasy — Warm human centered design system.
+   Calm off-white surfaces, soft white cards, deep neutral ink.
+   All colors live here as oklch tokens; never hardcode colors in components. */
+
+@theme inline {
+  --font-sans: 'DM Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Fraunces', 'DM Sans', serif;
+
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 16px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-ring-offset-background: var(--background);
+
+  --color-surface: var(--surface);
+  --color-warm: var(--warm);
+}
+
+:root {
+  --radius: 1.25rem;
+
+  /* soft cream canvas — neutral so color pops feel intentional */
+  --background: oklch(0.97 0.012 75);
+  --foreground: oklch(0.2 0.02 240);
+
+  --card: oklch(0.995 0.004 80);
+  --card-foreground: oklch(0.2 0.02 240);
+
+  --popover: oklch(0.995 0.004 80);
+  --popover-foreground: oklch(0.2 0.02 240);
+
+  /* primary = deep teal — used sparingly for CTAs, key accents */
+  --primary: oklch(0.5 0.09 210);
+  --primary-foreground: oklch(0.98 0.01 80);
+
+  /* secondary = soft seafoam — harmonized with the teal primary */
+  --secondary: oklch(0.9 0.028 195);
+  --secondary-foreground: oklch(0.32 0.05 210);
+
+
+  --muted: oklch(0.94 0.012 75);
+  --muted-foreground: oklch(0.5 0.02 240);
+
+  /* accent = warm amber — playful contrast against the teal */
+  --accent: oklch(0.83 0.13 75);
+  --accent-foreground: oklch(0.25 0.05 60);
+
+  --destructive: oklch(0.62 0.2 25);
+  --destructive-foreground: oklch(0.98 0.01 80);
+
+  --border: oklch(0.2 0.02 240 / 0.08);
+  --input: oklch(0.2 0.02 240 / 0.1);
+  --ring: oklch(0.5 0.09 210 / 0.35);
+
+  --surface: oklch(0.945 0.014 80);           /* cream surface for chips */
+  --warm: oklch(0.92 0.05 75);                /* soft amber tint for disclosure cards */
+
+}
+
+.dark {
+  --background: oklch(0.16 0.012 60);
+  --foreground: oklch(0.96 0.008 80);
+  --card: oklch(0.22 0.012 60);
+  --card-foreground: oklch(0.96 0.008 80);
+  --popover: oklch(0.22 0.012 60);
+  --popover-foreground: oklch(0.96 0.008 80);
+  --primary: oklch(0.96 0.008 80);
+  --primary-foreground: oklch(0.18 0.012 60);
+  --secondary: oklch(0.28 0.012 60);
+  --secondary-foreground: oklch(0.96 0.008 80);
+  --muted: oklch(0.28 0.012 60);
+  --muted-foreground: oklch(0.7 0.012 65);
+  --accent: oklch(0.78 0.13 75);
+  --accent-foreground: oklch(0.18 0.012 60);
+  --destructive: oklch(0.7 0.19 22);
+  --destructive-foreground: oklch(0.96 0.008 80);
+  --border: oklch(1 0 0 / 0.1);
+  --input: oklch(1 0 0 / 0.15);
+  --ring: oklch(0.96 0.008 80 / 0.3);
+  --surface: oklch(0.24 0.012 60);
+  --warm: oklch(0.3 0.03 70);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+  html, body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3 {
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
+  }
+}
+
+/* Hide scrollbar on horizontal chip rows */
+.scrollbar-hide::-webkit-scrollbar { display: none; }
+.scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
