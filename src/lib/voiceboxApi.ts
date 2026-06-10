@@ -26,6 +26,11 @@ export type VoiceBoxStatus = {
   last_result?: VoiceBoxGenerateResponse | null;
   history?: VoiceBoxGenerateResponse[];
   tts?: unknown;
+  audio_backend?: {
+    backend: string;
+    ready: boolean;
+    message: string;
+  };
 };
 
 export type VoiceBoxGenerateResponse = {

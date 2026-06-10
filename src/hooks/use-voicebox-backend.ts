@@ -7,7 +7,7 @@ import {
   type VoiceBoxStatus,
 } from "@/lib/voiceboxApi";
 
-export type VoiceBoxPhase = "idle" | "tracking" | "predicting";
+export type VoiceBoxPhase = "idle" | "preparing" | "ready" | "tracking" | "predicting";
 
 type BackendState = {
   phase: VoiceBoxPhase;
@@ -47,20 +47,44 @@ export function useVoiceBoxBackend() {
     }
   }, []);
 
-  const startTracking = useCallback(
+  const prepare = useCallback(
     async (mode: VoiceBoxMode = "Dysphonia") => {
       setState((current) => ({
         ...current,
-        phase: "tracking",
+        phase: "preparing",
         prediction: null,
         error: null,
       }));
-      await voiceboxApi.start(mode);
-      await voiceboxApi.listen();
-      await refresh();
+      try {
+        await voiceboxApi.start(mode);
+        setState((current) => ({
+          ...current,
+          phase: "ready",
+          error: null,
+        }));
+        await refresh();
+      } catch (error) {
+        setState((current) => ({
+          ...current,
+          phase: "idle",
+          error: error instanceof Error ? error.message : "Preparation failed",
+        }));
+        throw error;
+      }
     },
     [refresh],
   );
+
+  const startRecording = useCallback(async () => {
+    setState((current) => ({
+      ...current,
+      phase: "tracking",
+      prediction: null,
+      error: null,
+    }));
+    await voiceboxApi.listen();
+    await refresh();
+  }, [refresh]);
 
   const generatePrediction = useCallback(async () => {
     if (generatingRef.current) return null;
@@ -123,7 +147,8 @@ export function useVoiceBoxBackend() {
   return {
     ...state,
     cameraUrl: voiceboxApi.videoUrl,
-    startTracking,
+    prepare,
+    startRecording,
     generatePrediction,
     stop,
     speak,
