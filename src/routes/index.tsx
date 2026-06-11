@@ -145,8 +145,20 @@ function SpeakPage() {
   const isCameraLive = Boolean(backend.status?.camera_running);
   const [progress, setProgress] = useState(0);
   const [mode, setMode] = useState<"Dysphonia" | "Aphonia">("Dysphonia");
+  const [spokenText, setSpokenText] = useState("");
+  const [isSpeaking, setIsSpeaking] = useState(false);
 
   const isCurrentlyPredicting = phase === "predicting" && !showCard;
+
+  const isInputReady = (() => {
+    if (!backend.isBackendAvailable) return true;
+    const isCamReady = Boolean(backend.status?.camera_running);
+    if (mode === "Dysphonia") {
+      const isAudioReady = Boolean(backend.status?.audio_backend?.ready);
+      return isCamReady && isAudioReady;
+    }
+    return isCamReady;
+  })();
 
   useEffect(() => {
     if (!isCurrentlyPredicting) {
@@ -327,10 +339,31 @@ function SpeakPage() {
       return;
     }
 
+    setIsSpeaking(true);
+    setSpokenText(text);
+
+    const wordsCount = text.split(/\s+/).length;
+    const fallbackTime = Math.max(1500, wordsCount * 450);
+    let timer: number | undefined;
+
+    const finishSpeaking = () => {
+      if (timer) window.clearTimeout(timer);
+      setIsSpeaking(false);
+      setSpokenText("");
+      backend.stop().catch(() => null);
+      resetSession();
+    };
+
+    timer = window.setTimeout(() => {
+      finishSpeaking();
+    }, fallbackTime);
+
     try {
       await backend.speak(text);
     } catch {
-      browserSpeak(text);
+      browserSpeak(text, () => {
+        finishSpeaking();
+      });
     }
 
     pushRecent(text);
@@ -340,8 +373,6 @@ function SpeakPage() {
         .insert({ user_id: user.id, text, last_used_at: new Date().toISOString() })
         .then(() => { });
     }
-    await backend.stop().catch(() => null);
-    resetSession();
   }
 
   function handlePickAlternative(idx: number, alt: string) {
@@ -384,9 +415,6 @@ function SpeakPage() {
         <div className="flex flex-wrap items-center gap-2 px-6 pb-2">
           <span className="inline-flex items-center gap-1.5 rounded-full bg-card px-3 py-1 text-xs font-medium text-foreground ring-1 ring-border">
             <Globe className="size-3" /> Language: English
-          </span>
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-card px-3 py-1 text-xs font-medium text-foreground ring-1 ring-border">
-            {backend.isBackendAvailable ? "Backend connected" : "Demo fallback"}
           </span>
         </div>
 
@@ -436,6 +464,41 @@ function SpeakPage() {
                     alt="Live camera stream"
                     className="h-full w-full object-cover"
                   />
+                ) : isSpeaking ? (
+                  /* Speaking state visualizer */
+                  <div className="flex flex-col items-center justify-center h-full w-full p-8 text-center bg-card relative overflow-hidden animate-in fade-in duration-300">
+                    {/* Pulsing grid layout background */}
+                    <div className="absolute inset-0 bg-[linear-gradient(to_right,#8080800a_1px,transparent_1px),linear-gradient(to_bottom,#8080800a_1px,transparent_1px)] bg-[size:14px_24px] pointer-events-none" />
+                    <div className="absolute inset-0 bg-gradient-to-tr from-primary/5 via-accent/5 to-transparent animate-pulse duration-[4000ms] pointer-events-none" />
+                    
+                    <div className="relative flex flex-col items-center gap-6 z-10 w-full">
+                      <div className="relative">
+                        <div className="absolute inset-0 rounded-full bg-primary/20 blur-xl animate-ping" />
+                        <div className="relative rounded-full bg-card p-4 ring-1 ring-border/50 shadow-lg animate-bounce duration-[1500ms]">
+                          <Volume2 className="size-8 text-primary animate-pulse" />
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-1.5 max-w-xs">
+                        <span className="text-[10px] font-bold tracking-[0.2em] text-primary uppercase block">
+                          Speaking...
+                        </span>
+                        <p className="text-lg font-bold tracking-tight text-foreground leading-snug drop-shadow-sm min-h-[56px] flex items-center justify-center">
+                          "{spokenText}"
+                        </p>
+                      </div>
+
+                      {/* Fast pulsing multi-bar audio wave animation */}
+                      <div className="flex items-end justify-center gap-1 h-8 mt-2">
+                        <span className="w-1 h-3 bg-primary/40 rounded-full animate-bounce duration-300 delay-100" />
+                        <span className="w-1 h-6 bg-primary/60 rounded-full animate-bounce duration-[250ms] delay-300" />
+                        <span className="w-1 h-8 bg-primary/80 rounded-full animate-bounce duration-[200ms] delay-200" />
+                        <span className="w-1 h-5 bg-primary/60 rounded-full animate-bounce duration-[400ms] delay-500" />
+                        <span className="w-1 h-7 bg-primary/80 rounded-full animate-bounce duration-[300ms] delay-400" />
+                        <span className="w-1 h-4 bg-primary/40 rounded-full animate-bounce duration-[350ms] delay-100" />
+                      </div>
+                    </div>
+                  </div>
                 ) : phase === "predicting" && showCard ? (
                   /* Prediction Card directly inside the camera box container */
                   <div className="flex flex-col h-full w-full p-6 bg-card relative overflow-hidden animate-in fade-in duration-300">
@@ -562,6 +625,12 @@ function SpeakPage() {
                                       i === editingIdx ? { ...token, word: newVal } : token
                                     )
                                   );
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    setEditingIdx(null);
+                                  }
                                 }}
                                 placeholder="Type word..."
                                 className="w-full px-3 py-2 text-base rounded-xl bg-card border border-border text-foreground placeholder-muted-foreground focus:outline-none focus:ring-1 focus:ring-accent"
@@ -744,7 +813,13 @@ function SpeakPage() {
                   <div className="flex items-center gap-2 animate-in fade-in duration-300">
                     <button
                       onClick={handleStartRecording}
-                      className="inline-flex items-center gap-2 rounded-full bg-emerald-600 hover:bg-emerald-500 px-5 py-2.5 text-sm font-semibold text-white shadow-lg ring-1 ring-emerald-500/50 transition-all duration-150 active:scale-95"
+                      disabled={!isInputReady}
+                      className={cn(
+                        "inline-flex items-center gap-2 rounded-full px-5 py-2.5 text-sm font-semibold text-white shadow-lg transition-all duration-150 active:scale-95",
+                        isInputReady
+                          ? "bg-emerald-600 hover:bg-emerald-500 ring-1 ring-emerald-500/50"
+                          : "bg-emerald-600/40 cursor-not-allowed opacity-50"
+                      )}
                     >
                       <Mic className="size-3.5 animate-pulse text-white" /> Start recording
                     </button>
