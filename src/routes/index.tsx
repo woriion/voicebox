@@ -154,8 +154,7 @@ function SpeakPage() {
     if (!backend.isBackendAvailable) return true;
     const isCamReady = Boolean(backend.status?.camera_running);
     if (mode === "Dysphonia") {
-      const isAudioReady = Boolean(backend.status?.audio_backend?.ready);
-      return isCamReady && isAudioReady;
+      return isCamReady && Boolean(backend.status?.audio_backend?.ready);
     }
     return isCamReady;
   })();
@@ -340,32 +339,41 @@ function SpeakPage() {
     }
   }
 
-  async function triggerSpeech(text: string) {
+  async function triggerSpeech(text: string, options: { resetAfterSpeech?: boolean } = {}) {
+    const resetAfterSpeech = options.resetAfterSpeech ?? false;
     setIsSpeaking(true);
     setSpokenText(text);
 
     const wordsCount = text.split(/\s+/).length;
     const fallbackTime = Math.max(1500, wordsCount * 450);
     let timer: number | undefined;
+    let finished = false;
 
     const finishSpeaking = () => {
+      if (finished) return;
+      finished = true;
       if (timer) window.clearTimeout(timer);
       setIsSpeaking(false);
       setSpokenText("");
-      backend.stop().catch(() => null);
-      resetSession();
+      if (resetAfterSpeech) {
+        backend.stop().catch(() => null);
+        resetSession();
+      }
     };
 
     timer = window.setTimeout(() => {
       finishSpeaking();
     }, fallbackTime);
 
-    try {
-      await backend.speak(text);
-    } catch {
-      browserSpeak(text, () => {
-        finishSpeaking();
-      });
+    const browserStarted = browserSpeak(text, () => {
+      finishSpeaking();
+    }, () => {
+      finishSpeaking();
+    });
+
+    if (!browserStarted) {
+      toast("Text to speech could not start in this browser.");
+      finishSpeaking();
     }
 
     pushRecent(text);
@@ -383,7 +391,7 @@ function SpeakPage() {
       toast("Fill in the blanks before speaking.");
       return;
     }
-    await triggerSpeech(text);
+    await triggerSpeech(text, { resetAfterSpeech: true });
   }
 
   function handlePickAlternative(idx: number, alt: string) {
@@ -475,7 +483,7 @@ function SpeakPage() {
                     alt="Live camera stream"
                     className="h-full w-full object-cover"
                   />
-                ) : isSpeaking ? (
+                ) : isSpeaking && !isCurrentlyPredicting ? (
                   /* Speaking state visualizer */
                   <div className="flex flex-col items-center justify-center h-full w-full p-8 text-center bg-card relative overflow-hidden animate-in fade-in duration-300">
                     {/* Pulsing grid layout background */}
@@ -758,7 +766,7 @@ function SpeakPage() {
                           backend.status?.audio_backend?.ready ? "bg-emerald-500 animate-pulse" : "bg-rose-500"
                         )}
                       />
-                      <span>Audio: {backend.status?.audio_backend?.ready ? "Ready" : "Loading ASR..."}</span>
+                      <span>Audio: {backend.status?.audio_backend?.ready ? "Ready" : "Warming up..."}</span>
                     </div>
                   )}
                 </div>
@@ -876,7 +884,7 @@ function SpeakPage() {
 
 
 
-          {recent.length > 0 && (
+          {recent.length > 0 && !isCurrentlyPredicting && (
             <section>
               <div className="mb-2 flex items-center gap-1.5">
                 <Clock className="size-3.5 text-muted-foreground" />
@@ -900,7 +908,7 @@ function SpeakPage() {
             </section>
           )}
 
-          {!showCard && (
+          {!showCard && !isCurrentlyPredicting && (
             <section>
               <div className="mb-2 flex items-center gap-1.5">
                 <Sparkles className="size-3.5 text-muted-foreground" />

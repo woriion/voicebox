@@ -94,8 +94,13 @@ function textToTokens(text: string, ranked: VoiceBoxGenerateResponse["ranked"] =
     }));
 }
 
+function normalizeBackendText(text: string): string {
+  const trimmed = text.trim();
+  return /^\(?no confident transcript captured\)?$/i.test(trimmed) ? "" : trimmed;
+}
+
 export function resultToPrediction(result: VoiceBoxGenerateResponse): VoiceBoxPrediction {
-  const text = String(result.final_text ?? "").trim();
+  const text = normalizeBackendText(String(result.final_text ?? ""));
   return {
     text,
     rawText: result.raw_chaplin_text,
@@ -136,7 +141,7 @@ export const voiceboxApi = {
   speak(text: string) {
     return requestJson<VoiceBoxSpeakResponse>("/api/speak", {
       method: "POST",
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, source: "frontend_transcript" }),
     });
   },
 };

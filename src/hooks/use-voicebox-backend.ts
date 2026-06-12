@@ -134,6 +134,7 @@ export function useVoiceBoxBackend() {
     const timer = window.setInterval(async () => {
       const status = await refresh();
       if (
+        state.phase === "tracking" &&
         status?.listening &&
         Number(status.window_remaining || 0) <= 0.1 &&
         !status.generating
