@@ -198,6 +198,14 @@ function SpeakPage() {
   }, [isCurrentlyPredicting, backend.isBackendAvailable, backend.status?.generation_progress]);
 
   useEffect(() => {
+    const defaultDummies = [
+      "i want some water",
+      "i want some food",
+      "in front of the building",
+      "i love this place",
+      "i love this room",
+    ];
+
     if (user) {
       supabase
         .from("phrases")
@@ -205,25 +213,25 @@ function SpeakPage() {
         .order("last_used_at", { ascending: false })
         .limit(100)
         .then(({ data, error }) => {
-          if (data && !error) {
-            const texts = data.map((d: any) => d.text).filter(Boolean);
-            const uniqueTexts = Array.from(new Set(texts));
-            // Keep recent empty initially for a temporary session list
-            setPhraseHistory(uniqueTexts);
-          }
+          const dbTexts = data ? data.map((d: any) => d.text).filter(Boolean) : [];
+          const combined = [...dbTexts, ...defaultDummies];
+          const uniqueTexts = Array.from(new Set(combined));
+          setPhraseHistory(uniqueTexts);
         });
     } else {
       const saved = localStorage.getItem("voicebox_recent_phrases");
+      let localTexts: string[] = [];
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed)) {
-            const uniqueTexts = Array.from(new Set(parsed));
-            // Keep recent empty initially for a temporary session list
-            setPhraseHistory(uniqueTexts);
+            localTexts = parsed.filter(Boolean);
           }
         } catch { }
       }
+      const combined = [...localTexts, ...defaultDummies];
+      const uniqueTexts = Array.from(new Set(combined));
+      setPhraseHistory(uniqueTexts);
     }
   }, [user]);
 
@@ -332,13 +340,7 @@ function SpeakPage() {
     }
   }
 
-  async function handleSpeakSentence() {
-    const text = tokensToText(tokens).replace(/___/g, "").replace(/\s+/g, " ").trim();
-    if (!text) {
-      toast("Fill in the blanks before speaking.");
-      return;
-    }
-
+  async function triggerSpeech(text: string) {
     setIsSpeaking(true);
     setSpokenText(text);
 
@@ -373,6 +375,15 @@ function SpeakPage() {
         .insert({ user_id: user.id, text, last_used_at: new Date().toISOString() })
         .then(() => { });
     }
+  }
+
+  async function handleSpeakSentence() {
+    const text = tokensToText(tokens).replace(/___/g, "").replace(/\s+/g, " ").trim();
+    if (!text) {
+      toast("Fill in the blanks before speaking.");
+      return;
+    }
+    await triggerSpeech(text);
   }
 
   function handlePickAlternative(idx: number, alt: string) {
@@ -638,48 +649,52 @@ function SpeakPage() {
                               />
                             </div>
 
-                            {/* Suggested from history corrections */}
-                            {("historyAlternatives" in tokens[editingIdx]) &&
-                              (tokens[editingIdx] as any).historyAlternatives &&
-                              (tokens[editingIdx] as any).historyAlternatives.length > 0 && (
-                                <div className="space-y-1.5 animate-in fade-in duration-300">
-                                  <span className="text-[10px] font-bold uppercase tracking-wider text-accent block">
-                                    Suggested from history
+                            {user && (
+                              <>
+                                {/* Suggested from history corrections */}
+                                {("historyAlternatives" in tokens[editingIdx]) &&
+                                  (tokens[editingIdx] as any).historyAlternatives &&
+                                  (tokens[editingIdx] as any).historyAlternatives.length > 0 && (
+                                    <div className="space-y-1.5 animate-in fade-in duration-300">
+                                      <span className="text-[10px] font-bold uppercase tracking-wider text-accent block">
+                                        Suggested from history
+                                      </span>
+                                      <div className="flex flex-wrap gap-1.5">
+                                        {(tokens[editingIdx] as any).historyAlternatives.map((alt: string) => (
+                                          <button
+                                            key={alt}
+                                            onClick={() => handlePickAlternative(editingIdx, alt)}
+                                            className="rounded-lg bg-accent/10 border border-accent/30 px-2.5 py-1.5 text-xs font-semibold text-accent hover:bg-accent/20 transition-colors"
+                                          >
+                                            {tokens[editingIdx].word || "___"} → {alt}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+
+                                {/* Suggestions list */}
+                                <div className="space-y-1.5">
+                                  <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">
+                                    Suggestions
                                   </span>
                                   <div className="flex flex-wrap gap-1.5">
-                                    {(tokens[editingIdx] as any).historyAlternatives.map((alt: string) => (
+                                    {(tokens[editingIdx].alternatives.length
+                                      ? tokens[editingIdx].alternatives
+                                      : ["yes", "no", "please", "help"]
+                                    ).map((alt) => (
                                       <button
                                         key={alt}
                                         onClick={() => handlePickAlternative(editingIdx, alt)}
-                                        className="rounded-lg bg-accent/10 border border-accent/30 px-2.5 py-1.5 text-xs font-semibold text-accent hover:bg-accent/20 transition-colors"
+                                        className="rounded-lg bg-card px-2.5 py-1.5 text-xs font-medium text-foreground ring-1 ring-border hover:bg-surface transition-colors"
                                       >
-                                        {tokens[editingIdx].word || "___"} → {alt}
+                                        {alt}
                                       </button>
                                     ))}
                                   </div>
                                 </div>
-                              )}
-
-                            {/* Suggestions list */}
-                            <div className="space-y-1.5">
-                              <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">
-                                Suggestions
-                              </span>
-                              <div className="flex flex-wrap gap-1.5">
-                                {(tokens[editingIdx].alternatives.length
-                                  ? tokens[editingIdx].alternatives
-                                  : ["yes", "no", "please", "help"]
-                                ).map((alt) => (
-                                  <button
-                                    key={alt}
-                                    onClick={() => handlePickAlternative(editingIdx, alt)}
-                                    className="rounded-lg bg-card px-2.5 py-1.5 text-xs font-medium text-foreground ring-1 ring-border hover:bg-surface transition-colors"
-                                  >
-                                    {alt}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
+                              </>
+                            )}
                           </div>
 
                           {/* Footer Action: Delete word */}
@@ -873,13 +888,8 @@ function SpeakPage() {
                 {recent.map((phrase) => (
                   <button
                     key={phrase}
-                    onClick={async () => {
-                      try {
-                        await backend.speak(phrase);
-                      } catch {
-                        browserSpeak(phrase);
-                      }
-                      pushRecent(phrase);
+                    onClick={() => {
+                      triggerSpeech(phrase);
                     }}
                     className="rounded-full bg-card px-3.5 py-1.5 text-sm text-foreground ring-1 ring-border shadow-sm transition-transform active:scale-95"
                   >
@@ -903,13 +913,8 @@ function SpeakPage() {
                   (phrase) => (
                     <button
                       key={phrase}
-                      onClick={async () => {
-                        try {
-                          await backend.speak(phrase);
-                        } catch {
-                          browserSpeak(phrase);
-                        }
-                        pushRecent(phrase);
+                      onClick={() => {
+                        triggerSpeech(phrase);
                       }}
                       className="flex items-center justify-between gap-2 rounded-2xl bg-card px-4 py-3 text-left text-sm font-medium text-foreground ring-1 ring-border shadow-sm transition-transform active:scale-95"
                     >
