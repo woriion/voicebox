@@ -145,8 +145,19 @@ function SpeakPage() {
   const isCameraLive = Boolean(backend.status?.camera_running);
   const [progress, setProgress] = useState(0);
   const [mode, setMode] = useState<"Dysphonia" | "Aphonia">("Dysphonia");
+  const [spokenText, setSpokenText] = useState("");
+  const [isSpeaking, setIsSpeaking] = useState(false);
 
   const isCurrentlyPredicting = phase === "predicting" && !showCard;
+
+  const isInputReady = (() => {
+    if (!backend.isBackendAvailable) return true;
+    const isCamReady = Boolean(backend.status?.camera_running);
+    if (mode === "Dysphonia") {
+      return isCamReady && Boolean(backend.status?.audio_backend?.ready);
+    }
+    return isCamReady;
+  })();
 
   useEffect(() => {
     if (!isCurrentlyPredicting) {
@@ -186,6 +197,14 @@ function SpeakPage() {
   }, [isCurrentlyPredicting, backend.isBackendAvailable, backend.status?.generation_progress]);
 
   useEffect(() => {
+    const defaultDummies = [
+      "i want some water",
+      "i want some food",
+      "in front of the building",
+      "i love this place",
+      "i love this room",
+    ];
+
     if (user) {
       supabase
         .from("phrases")
@@ -193,25 +212,25 @@ function SpeakPage() {
         .order("last_used_at", { ascending: false })
         .limit(100)
         .then(({ data, error }) => {
-          if (data && !error) {
-            const texts = data.map((d: any) => d.text).filter(Boolean);
-            const uniqueTexts = Array.from(new Set(texts));
-            // Keep recent empty initially for a temporary session list
-            setPhraseHistory(uniqueTexts);
-          }
+          const dbTexts = data ? data.map((d: any) => d.text).filter(Boolean) : [];
+          const combined = [...dbTexts, ...defaultDummies];
+          const uniqueTexts = Array.from(new Set(combined));
+          setPhraseHistory(uniqueTexts);
         });
     } else {
       const saved = localStorage.getItem("voicebox_recent_phrases");
+      let localTexts: string[] = [];
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed)) {
-            const uniqueTexts = Array.from(new Set(parsed));
-            // Keep recent empty initially for a temporary session list
-            setPhraseHistory(uniqueTexts);
+            localTexts = parsed.filter(Boolean);
           }
         } catch { }
       }
+      const combined = [...localTexts, ...defaultDummies];
+      const uniqueTexts = Array.from(new Set(combined));
+      setPhraseHistory(uniqueTexts);
     }
   }, [user]);
 
@@ -320,17 +339,41 @@ function SpeakPage() {
     }
   }
 
-  async function handleSpeakSentence() {
-    const text = tokensToText(tokens).replace(/___/g, "").replace(/\s+/g, " ").trim();
-    if (!text) {
-      toast("Fill in the blanks before speaking.");
-      return;
-    }
+  async function triggerSpeech(text: string, options: { resetAfterSpeech?: boolean } = {}) {
+    const resetAfterSpeech = options.resetAfterSpeech ?? false;
+    setIsSpeaking(true);
+    setSpokenText(text);
 
-    try {
-      await backend.speak(text);
-    } catch {
-      browserSpeak(text);
+    const wordsCount = text.split(/\s+/).length;
+    const fallbackTime = Math.max(1500, wordsCount * 450);
+    let timer: number | undefined;
+    let finished = false;
+
+    const finishSpeaking = () => {
+      if (finished) return;
+      finished = true;
+      if (timer) window.clearTimeout(timer);
+      setIsSpeaking(false);
+      setSpokenText("");
+      if (resetAfterSpeech) {
+        backend.stop().catch(() => null);
+        resetSession();
+      }
+    };
+
+    timer = window.setTimeout(() => {
+      finishSpeaking();
+    }, fallbackTime);
+
+    const browserStarted = browserSpeak(text, () => {
+      finishSpeaking();
+    }, () => {
+      finishSpeaking();
+    });
+
+    if (!browserStarted) {
+      toast("Text to speech could not start in this browser.");
+      finishSpeaking();
     }
 
     pushRecent(text);
@@ -340,8 +383,15 @@ function SpeakPage() {
         .insert({ user_id: user.id, text, last_used_at: new Date().toISOString() })
         .then(() => { });
     }
-    await backend.stop().catch(() => null);
-    resetSession();
+  }
+
+  async function handleSpeakSentence() {
+    const text = tokensToText(tokens).replace(/___/g, "").replace(/\s+/g, " ").trim();
+    if (!text) {
+      toast("Fill in the blanks before speaking.");
+      return;
+    }
+    await triggerSpeech(text, { resetAfterSpeech: true });
   }
 
   function handlePickAlternative(idx: number, alt: string) {
@@ -384,9 +434,6 @@ function SpeakPage() {
         <div className="flex flex-wrap items-center gap-2 px-6 pb-2">
           <span className="inline-flex items-center gap-1.5 rounded-full bg-card px-3 py-1 text-xs font-medium text-foreground ring-1 ring-border">
             <Globe className="size-3" /> Language: English
-          </span>
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-card px-3 py-1 text-xs font-medium text-foreground ring-1 ring-border">
-            {backend.isBackendAvailable ? "Backend connected" : "Demo fallback"}
           </span>
         </div>
 
@@ -436,6 +483,41 @@ function SpeakPage() {
                     alt="Live camera stream"
                     className="h-full w-full object-cover"
                   />
+                ) : isSpeaking && !isCurrentlyPredicting ? (
+                  /* Speaking state visualizer */
+                  <div className="flex flex-col items-center justify-center h-full w-full p-8 text-center bg-card relative overflow-hidden animate-in fade-in duration-300">
+                    {/* Pulsing grid layout background */}
+                    <div className="absolute inset-0 bg-[linear-gradient(to_right,#8080800a_1px,transparent_1px),linear-gradient(to_bottom,#8080800a_1px,transparent_1px)] bg-[size:14px_24px] pointer-events-none" />
+                    <div className="absolute inset-0 bg-gradient-to-tr from-primary/5 via-accent/5 to-transparent animate-pulse duration-[4000ms] pointer-events-none" />
+                    
+                    <div className="relative flex flex-col items-center gap-6 z-10 w-full">
+                      <div className="relative">
+                        <div className="absolute inset-0 rounded-full bg-primary/20 blur-xl animate-ping" />
+                        <div className="relative rounded-full bg-card p-4 ring-1 ring-border/50 shadow-lg animate-bounce duration-[1500ms]">
+                          <Volume2 className="size-8 text-primary animate-pulse" />
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-1.5 max-w-xs">
+                        <span className="text-[10px] font-bold tracking-[0.2em] text-primary uppercase block">
+                          Speaking...
+                        </span>
+                        <p className="text-lg font-bold tracking-tight text-foreground leading-snug drop-shadow-sm min-h-[56px] flex items-center justify-center">
+                          "{spokenText}"
+                        </p>
+                      </div>
+
+                      {/* Fast pulsing multi-bar audio wave animation */}
+                      <div className="flex items-end justify-center gap-1 h-8 mt-2">
+                        <span className="w-1 h-3 bg-primary/40 rounded-full animate-bounce duration-300 delay-100" />
+                        <span className="w-1 h-6 bg-primary/60 rounded-full animate-bounce duration-[250ms] delay-300" />
+                        <span className="w-1 h-8 bg-primary/80 rounded-full animate-bounce duration-[200ms] delay-200" />
+                        <span className="w-1 h-5 bg-primary/60 rounded-full animate-bounce duration-[400ms] delay-500" />
+                        <span className="w-1 h-7 bg-primary/80 rounded-full animate-bounce duration-[300ms] delay-400" />
+                        <span className="w-1 h-4 bg-primary/40 rounded-full animate-bounce duration-[350ms] delay-100" />
+                      </div>
+                    </div>
+                  </div>
                 ) : phase === "predicting" && showCard ? (
                   /* Prediction Card directly inside the camera box container */
                   <div className="flex flex-col h-full w-full p-6 bg-card relative overflow-hidden animate-in fade-in duration-300">
@@ -563,54 +645,64 @@ function SpeakPage() {
                                     )
                                   );
                                 }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    setEditingIdx(null);
+                                  }
+                                }}
                                 placeholder="Type word..."
                                 className="w-full px-3 py-2 text-base rounded-xl bg-card border border-border text-foreground placeholder-muted-foreground focus:outline-none focus:ring-1 focus:ring-accent"
                                 autoFocus
                               />
                             </div>
 
-                            {/* Suggested from history corrections */}
-                            {("historyAlternatives" in tokens[editingIdx]) &&
-                              (tokens[editingIdx] as any).historyAlternatives &&
-                              (tokens[editingIdx] as any).historyAlternatives.length > 0 && (
-                                <div className="space-y-1.5 animate-in fade-in duration-300">
-                                  <span className="text-[10px] font-bold uppercase tracking-wider text-accent block">
-                                    Suggested from history
+                            {user && (
+                              <>
+                                {/* Suggested from history corrections */}
+                                {("historyAlternatives" in tokens[editingIdx]) &&
+                                  (tokens[editingIdx] as any).historyAlternatives &&
+                                  (tokens[editingIdx] as any).historyAlternatives.length > 0 && (
+                                    <div className="space-y-1.5 animate-in fade-in duration-300">
+                                      <span className="text-[10px] font-bold uppercase tracking-wider text-accent block">
+                                        Suggested from history
+                                      </span>
+                                      <div className="flex flex-wrap gap-1.5">
+                                        {(tokens[editingIdx] as any).historyAlternatives.map((alt: string) => (
+                                          <button
+                                            key={alt}
+                                            onClick={() => handlePickAlternative(editingIdx, alt)}
+                                            className="rounded-lg bg-accent/10 border border-accent/30 px-2.5 py-1.5 text-xs font-semibold text-accent hover:bg-accent/20 transition-colors"
+                                          >
+                                            {tokens[editingIdx].word || "___"} → {alt}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+
+                                {/* Suggestions list */}
+                                <div className="space-y-1.5">
+                                  <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">
+                                    Suggestions
                                   </span>
                                   <div className="flex flex-wrap gap-1.5">
-                                    {(tokens[editingIdx] as any).historyAlternatives.map((alt: string) => (
+                                    {(tokens[editingIdx].alternatives.length
+                                      ? tokens[editingIdx].alternatives
+                                      : ["yes", "no", "please", "help"]
+                                    ).map((alt) => (
                                       <button
                                         key={alt}
                                         onClick={() => handlePickAlternative(editingIdx, alt)}
-                                        className="rounded-lg bg-accent/10 border border-accent/30 px-2.5 py-1.5 text-xs font-semibold text-accent hover:bg-accent/20 transition-colors"
+                                        className="rounded-lg bg-card px-2.5 py-1.5 text-xs font-medium text-foreground ring-1 ring-border hover:bg-surface transition-colors"
                                       >
-                                        {tokens[editingIdx].word || "___"} → {alt}
+                                        {alt}
                                       </button>
                                     ))}
                                   </div>
                                 </div>
-                              )}
-
-                            {/* Suggestions list */}
-                            <div className="space-y-1.5">
-                              <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">
-                                Suggestions
-                              </span>
-                              <div className="flex flex-wrap gap-1.5">
-                                {(tokens[editingIdx].alternatives.length
-                                  ? tokens[editingIdx].alternatives
-                                  : ["yes", "no", "please", "help"]
-                                ).map((alt) => (
-                                  <button
-                                    key={alt}
-                                    onClick={() => handlePickAlternative(editingIdx, alt)}
-                                    className="rounded-lg bg-card px-2.5 py-1.5 text-xs font-medium text-foreground ring-1 ring-border hover:bg-surface transition-colors"
-                                  >
-                                    {alt}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
+                              </>
+                            )}
                           </div>
 
                           {/* Footer Action: Delete word */}
@@ -674,7 +766,7 @@ function SpeakPage() {
                           backend.status?.audio_backend?.ready ? "bg-emerald-500 animate-pulse" : "bg-rose-500"
                         )}
                       />
-                      <span>Audio: {backend.status?.audio_backend?.ready ? "Ready" : "Loading ASR..."}</span>
+                      <span>Audio: {backend.status?.audio_backend?.ready ? "Ready" : "Warming up..."}</span>
                     </div>
                   )}
                 </div>
@@ -744,7 +836,13 @@ function SpeakPage() {
                   <div className="flex items-center gap-2 animate-in fade-in duration-300">
                     <button
                       onClick={handleStartRecording}
-                      className="inline-flex items-center gap-2 rounded-full bg-emerald-600 hover:bg-emerald-500 px-5 py-2.5 text-sm font-semibold text-white shadow-lg ring-1 ring-emerald-500/50 transition-all duration-150 active:scale-95"
+                      disabled={!isInputReady}
+                      className={cn(
+                        "inline-flex items-center gap-2 rounded-full px-5 py-2.5 text-sm font-semibold text-white shadow-lg transition-all duration-150 active:scale-95",
+                        isInputReady
+                          ? "bg-emerald-600 hover:bg-emerald-500 ring-1 ring-emerald-500/50"
+                          : "bg-emerald-600/40 cursor-not-allowed opacity-50"
+                      )}
                     >
                       <Mic className="size-3.5 animate-pulse text-white" /> Start recording
                     </button>
@@ -786,7 +884,7 @@ function SpeakPage() {
 
 
 
-          {recent.length > 0 && (
+          {recent.length > 0 && !isCurrentlyPredicting && (
             <section>
               <div className="mb-2 flex items-center gap-1.5">
                 <Clock className="size-3.5 text-muted-foreground" />
@@ -798,13 +896,8 @@ function SpeakPage() {
                 {recent.map((phrase) => (
                   <button
                     key={phrase}
-                    onClick={async () => {
-                      try {
-                        await backend.speak(phrase);
-                      } catch {
-                        browserSpeak(phrase);
-                      }
-                      pushRecent(phrase);
+                    onClick={() => {
+                      triggerSpeech(phrase);
                     }}
                     className="rounded-full bg-card px-3.5 py-1.5 text-sm text-foreground ring-1 ring-border shadow-sm transition-transform active:scale-95"
                   >
@@ -815,7 +908,7 @@ function SpeakPage() {
             </section>
           )}
 
-          {!showCard && (
+          {!showCard && !isCurrentlyPredicting && (
             <section>
               <div className="mb-2 flex items-center gap-1.5">
                 <Sparkles className="size-3.5 text-muted-foreground" />
@@ -828,13 +921,8 @@ function SpeakPage() {
                   (phrase) => (
                     <button
                       key={phrase}
-                      onClick={async () => {
-                        try {
-                          await backend.speak(phrase);
-                        } catch {
-                          browserSpeak(phrase);
-                        }
-                        pushRecent(phrase);
+                      onClick={() => {
+                        triggerSpeech(phrase);
                       }}
                       className="flex items-center justify-between gap-2 rounded-2xl bg-card px-4 py-3 text-left text-sm font-medium text-foreground ring-1 ring-border shadow-sm transition-transform active:scale-95"
                     >
